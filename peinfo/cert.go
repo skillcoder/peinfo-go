@@ -7,9 +7,14 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"runtime"
+	"syscall"
+	"unsafe"
 
 	// "github.com/fullsailor/pkcs7"
 	"go.mozilla.org/pkcs7"
+	// Альтернативный источник пула корневых сертификатов для Windows
+	"github.com/TheThingsNetwork/go-utils/roots"
 )
 
 const (
@@ -95,16 +100,56 @@ func (f *FileT) VerifyCert() (cert *x509.Certificate, verified bool, err error) 
 
 	cert = p7.GetOnlySigner()
 
-	cp, err := x509.SystemCertPool()
-	if nil != err {
-		return nil, false, err
-	}
 	// cp := x509.NewCertPool()
+	var cp *x509.CertPool
+	if runtime.GOOS == "windows" {
+		cp = roots.MozillaRootCAs
+	} else {
+		cp, err = x509.SystemCertPool()
+		if nil != err {
+			return nil, false, err
+		}
+	}
 
 	err = p7.VerifyWithChain(cp)
-	if nil == err {
+	if err == nil {
 		verified = true
 	}
 
 	return cert, verified, err
+}
+
+// https://golang.org/src/crypto/x509/root_windows.go:244
+// SystemCertPool загружает сертификаты из виндового хранилища (вероятно) Не возвращает сейчас.
+func SystemCertPool() {
+	storeHandle, err := syscall.CertOpenSystemStore(0, syscall.StringToUTF16Ptr("Root"))
+	if err != nil {
+		fmt.Println(syscall.GetLastError())
+	}
+
+	const CRYPT_E_NOT_FOUND = 0x80092004
+
+	var certs []*x509.Certificate
+	var cert *syscall.CertContext
+	for {
+		cert, err = syscall.CertEnumCertificatesInStore(storeHandle, cert)
+		if err != nil {
+			if errno, ok := err.(syscall.Errno); ok {
+				if errno == CRYPT_E_NOT_FOUND {
+					break
+				}
+			}
+			fmt.Println(syscall.GetLastError())
+		}
+		if cert == nil {
+			break
+		}
+		// Copy the buf, since ParseCertificate does not create its own copy.
+		buf := (*[1 << 20]byte)(unsafe.Pointer(cert.EncodedCert))[:]
+		buf2 := make([]byte, cert.Length)
+		copy(buf2, buf)
+		if c, err := x509.ParseCertificate(buf2); err == nil {
+			certs = append(certs, c)
+		}
+	}
 }
