@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/jdferrell3/peinfo-go/peinfo"
+	"github.com/skillcoder/peinfo-go/peinfo"
 )
 
 func checkErr(err error) {
